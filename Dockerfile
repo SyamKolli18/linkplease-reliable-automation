@@ -18,5 +18,5 @@ COPY . .
 # Expose FastAPI default port
 EXPOSE 8000
 
-# Default command stamps database migration 002 then starts web server
-CMD ["sh", "-c", "python -m alembic stamp 002_add_dm_id_and_event_type && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Default command runs idempotent production database migration sync then starts web server
+CMD ["sh", "-c", "python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

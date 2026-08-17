@@ -60,18 +60,29 @@ def run_migrations(db_url: str = None, force_run: bool = False):
             alembic_cfg.set_main_option("sqlalchemy.url", db_url)
 
         # Check if alembic_version table exists and has a valid revision recorded
-        has_alembic_ver = False
+        current_rev = None
         if "alembic_version" in tables:
             with engine.connect() as conn:
                 result = conn.execute(text("SELECT version_num FROM alembic_version")).fetchall()
                 if result and result[0][0]:
-                    has_alembic_ver = True
-                    logger.info(f"Found active Alembic version record: '{result[0][0]}'. No pre-stamping required.")
+                    current_rev = result[0][0]
+                    logger.info(f"Found recorded Alembic revision: '{current_rev}'.")
+
+        schema_complete = is_schema_002_complete(inspector)
+
+        # Detect false stamp: alembic_version claims 002 but physical schema is missing 002 columns
+        if current_rev == "002_add_dm_id_and_event_type" and not schema_complete:
+            logger.warning(
+                "alembic_version claims 002_add_dm_id_and_event_type but physical schema is incomplete! "
+                "Re-stamping 001_initial_tables so migration 002 executes DDL..."
+            )
+            command.stamp(alembic_cfg, "001_initial_tables")
+            current_rev = "001_initial_tables"
 
         # Evaluate initial stamping ONLY if alembic_version has no recorded revision
-        if not has_alembic_ver:
+        if not current_rev:
             if "rules" in tables:
-                if is_schema_002_complete(inspector):
+                if schema_complete:
                     logger.info("Existing database matches complete 002 schema. Stamping 002_add_dm_id_and_event_type...")
                     command.stamp(alembic_cfg, "002_add_dm_id_and_event_type")
                 else:

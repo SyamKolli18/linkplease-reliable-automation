@@ -144,3 +144,29 @@ def test_scenario_f_and_g_existing_db_at_002_restart(tmp_path):
     with engine.connect() as conn:
         ver2 = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
         assert ver2 == "002_add_dm_id_and_event_type"
+
+
+def test_scenario_h_false_stamp_002_self_healing(tmp_path):
+    """Scenario H: alembic_version falsely claims 002 but physical schema is incomplete -> self-heals by re-stamping 001 and upgrading."""
+    db_file = tmp_path / "test_scenario_h.db"
+    db_url = f"sqlite:///{db_file}"
+
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(alembic_cfg, "001_initial_tables")
+
+    # Falsely stamp 002 in alembic_version table while physical schema is 001
+    command.stamp(alembic_cfg, "002_add_dm_id_and_event_type")
+
+    engine = create_engine(db_url)
+    inspector = inspect(engine)
+    assert is_schema_002_complete(inspector) is False
+
+    # Run migration helper -> detects false stamp, re-stamps 001, upgrades to 002
+    run_migrations(db_url=db_url, force_run=True)
+
+    inspector = inspect(engine)
+    assert is_schema_002_complete(inspector) is True
+    with engine.connect() as conn:
+        ver = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert ver == "002_add_dm_id_and_event_type"

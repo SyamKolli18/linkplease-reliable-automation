@@ -18,5 +18,5 @@ COPY . .
 # Expose FastAPI default port
 EXPOSE 8000
 
-# Default command runs web server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command runs database migrations then starts web server
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

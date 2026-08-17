@@ -13,6 +13,7 @@ from app.database import Base
 class JobStatus(str, enum.Enum):
     QUEUED = "QUEUED"
     PROCESSING = "PROCESSING"
+    ACCEPTED = "ACCEPTED"
     SENT = "SENT"
     FAILED = "FAILED"
     DUPLICATE_BLOCKED = "DUPLICATE_BLOCKED"
@@ -26,6 +27,7 @@ class DMJob(Base):
     __tablename__ = "dm_jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    dm_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     event_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("events.id", ondelete="CASCADE"), nullable=False
     )

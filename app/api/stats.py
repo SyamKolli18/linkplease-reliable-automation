@@ -26,7 +26,11 @@ def get_stats(db: Session = Depends(get_db)):
                 case(
                     (
                         DMJob.status.in_(
-                            [JobStatus.QUEUED.value, JobStatus.PROCESSING.value]
+                            [
+                                JobStatus.QUEUED.value,
+                                JobStatus.PROCESSING.value,
+                                JobStatus.ACCEPTED.value,
+                            ]
                         ),
                         1,
                     ),

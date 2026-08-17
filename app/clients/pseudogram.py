@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 class PseudoGramResponse:
     status_code: int
     data: Optional[dict] = None
+    dm_id: Optional[str] = None
+    dm_status: Optional[str] = None
     retry_after: Optional[int] = None
     error_message: Optional[str] = None
 
@@ -74,6 +76,9 @@ class PseudoGramClient:
             except Exception:
                 data = None
 
+            dm_id = data.get("dm_id") if isinstance(data, dict) else None
+            dm_status = data.get("status") if isinstance(data, dict) else None
+
             error_msg = None
             if status_code >= 400:
                 error_msg = f"HTTP {status_code}: {response.text}"
@@ -81,6 +86,8 @@ class PseudoGramClient:
             return PseudoGramResponse(
                 status_code=status_code,
                 data=data,
+                dm_id=dm_id,
+                dm_status=dm_status,
                 retry_after=retry_after,
                 error_message=error_msg,
             )
@@ -91,3 +98,40 @@ class PseudoGramClient:
                 status_code=500,
                 error_message=f"Network error: {str(exc)}",
             )
+
+    def get_dm_status(self, dm_id: str) -> PseudoGramResponse:
+        """Check delivery status of a DM via PseudoGram API GET /v1/dm/{dm_id}."""
+        url = f"{self.base_url}/v1/dm/{dm_id}"
+        headers = {
+            "X-API-Key": self.api_key,
+        }
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(url, headers=headers)
+
+            status_code = response.status_code
+            data = None
+            try:
+                data = response.json()
+            except Exception:
+                data = None
+
+            dm_status = data.get("status") if isinstance(data, dict) else None
+            error_msg = f"HTTP {status_code}: {response.text}" if status_code >= 400 else None
+
+            return PseudoGramResponse(
+                status_code=status_code,
+                data=data,
+                dm_id=dm_id,
+                dm_status=dm_status,
+                error_message=error_msg,
+            )
+
+        except httpx.RequestError as exc:
+            logger.error(f"Network error when checking DM status {dm_id}: {exc}")
+            return PseudoGramResponse(
+                status_code=500,
+                error_message=f"Network error: {str(exc)}",
+            )
+

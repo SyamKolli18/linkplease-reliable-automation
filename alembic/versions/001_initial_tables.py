@@ -86,3 +86,4 @@ def downgrade() -> None:
     op.drop_table('dm_jobs')
     op.drop_table('events')
     op.drop_table('rules')
+

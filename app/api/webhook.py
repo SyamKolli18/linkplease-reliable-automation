@@ -30,13 +30,17 @@ def handle_webhook(payload: WebhookEvent, db: Session = Depends(get_db)):
         logger.info(f"Duplicate event received: {payload.event_id}. Skipping processing.")
         return {"status": "ok", "message": "Duplicate event ignored"}
 
+    # Extract user_id safely from data.from if available
+    user_id = payload.data.from_user.user_id if payload.data.from_user else None
+
     # 2. Persist event
     event = Event(
         id=payload.event_id,
-        post_id=payload.post_id,
-        comment_id=payload.comment_id,
-        user_id=payload.user_id,
-        text=payload.text,
+        event_type=payload.event_type,
+        post_id=payload.data.post_id,
+        comment_id=payload.data.comment_id,
+        user_id=user_id,
+        text=payload.data.text,
     )
     db.add(event)
 
@@ -47,17 +51,27 @@ def handle_webhook(payload: WebhookEvent, db: Session = Depends(get_db)):
         logger.info(f"Duplicate event conflict caught: {payload.event_id}.")
         return {"status": "ok", "message": "Duplicate event ignored"}
 
-    # 3. Match active keyword rules
-    matched_rules = match_rules(payload.text, db)
+    # 3. If comment.deleted or missing text/user_id, save event and return HTTP 200 without queuing jobs
+    if payload.event_type == "comment.deleted" or not payload.data.text or not user_id:
+        db.commit()
+        return {
+            "status": "ok",
+            "event_id": payload.event_id,
+            "jobs_queued": 0,
+            "message": "Event processed (no rule matching required)",
+        }
+
+    # 4. Match active keyword rules
+    matched_rules = match_rules(payload.data.text, db)
     
-    # 4. Queue DM jobs for matched rules synchronously inside transaction
+    # 5. Queue DM jobs for matched rules synchronously inside transaction
     now = datetime.now(timezone.utc)
     for rule in matched_rules:
         job = DMJob(
             event_id=event.id,
             rule_id=rule.id,
-            user_id=payload.user_id,
-            comment_id=payload.comment_id,
+            user_id=user_id,
+            comment_id=payload.data.comment_id,
             dm_message=rule.dm_message,
             status=JobStatus.QUEUED.value,
             next_retry_at=now,

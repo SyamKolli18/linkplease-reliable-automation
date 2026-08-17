@@ -49,7 +49,7 @@ class DMWorker:
             query = (
                 db.query(DMJob)
                 .filter(
-                    DMJob.status.in_([JobStatus.QUEUED.value]),
+                    DMJob.status.in_([JobStatus.QUEUED.value, JobStatus.ACCEPTED.value]),
                     DMJob.next_retry_at <= now,
                 )
                 .order_by(DMJob.created_at.asc())
@@ -84,6 +84,37 @@ class DMWorker:
     def process_job(self, db: Session, job: DMJob):
         """Process a single claimed DMJob."""
         logger.info(f"Processing job {job.id} for user {job.user_id}, rule {job.rule_id}")
+        now = datetime.now(timezone.utc)
+
+        # If job already has a dm_id, poll delivery status via GET /v1/dm/{dm_id}
+        if job.dm_id:
+            response = self.client.get_dm_status(job.dm_id)
+            if response.status_code == 200:
+                if response.dm_status == "delivered":
+                    job.status = JobStatus.SENT.value
+                    job.updated_at = now
+                    job.last_error = None
+                    db.commit()
+                    logger.info(f"DM {job.dm_id} for job {job.id} confirmed delivered.")
+                elif response.dm_status == "failed":
+                    job.status = JobStatus.FAILED.value
+                    job.updated_at = now
+                    job.last_error = "PseudoGram DM delivery failed."
+                    db.commit()
+                    logger.error(f"DM {job.dm_id} for job {job.id} failed on PseudoGram API.")
+                else:
+                    # Still queued on mock server, check again shortly
+                    job.status = JobStatus.ACCEPTED.value
+                    job.next_retry_at = now + timedelta(seconds=1)
+                    job.updated_at = now
+                    db.commit()
+            else:
+                # Transient error checking status, retry checking later
+                job.status = JobStatus.ACCEPTED.value
+                job.next_retry_at = now + timedelta(seconds=2)
+                job.updated_at = now
+                db.commit()
+            return
 
         delivery = None
 
@@ -96,7 +127,7 @@ class DMWorker:
         if existing_delivery:
             logger.info(f"User {job.user_id} already received DM for rule {job.rule_id}. Blocking duplicate.")
             job.status = JobStatus.DUPLICATE_BLOCKED.value
-            job.updated_at = datetime.now(timezone.utc)
+            job.updated_at = now
             db.commit()
             return
 
@@ -114,7 +145,7 @@ class DMWorker:
             savepoint.rollback()
             logger.info(f"Race condition caught: User {job.user_id} delivery already exists for rule {job.rule_id}.")
             job.status = JobStatus.DUPLICATE_BLOCKED.value
-            job.updated_at = datetime.now(timezone.utc)
+            job.updated_at = now
             db.commit()
             return
 
@@ -127,8 +158,6 @@ class DMWorker:
             idempotency_key=idempotency_key,
         )
 
-        now = datetime.now(timezone.utc)
-
         def _remove_delivery_if_present():
             nonlocal delivery
             if delivery is not None and delivery in db:
@@ -137,11 +166,19 @@ class DMWorker:
         # Step 4: Handle response status codes
         if response.status_code == 202:
             # Success: DM queued/accepted by PseudoGram
-            job.status = JobStatus.SENT.value
+            job.dm_id = response.dm_id
+            if response.dm_status == "delivered":
+                job.status = JobStatus.SENT.value
+            elif response.dm_status == "failed":
+                job.status = JobStatus.FAILED.value
+            else:
+                job.status = JobStatus.ACCEPTED.value
+                job.next_retry_at = now + timedelta(seconds=1)
+
             job.updated_at = now
             job.last_error = None
             db.commit()
-            logger.info(f"Successfully sent DM for job {job.id}")
+            logger.info(f"Successfully sent DM request for job {job.id}, dm_id={job.dm_id}")
 
         elif response.status_code == 429:
             # Rate limited: rollback delivery lock so it can retry later

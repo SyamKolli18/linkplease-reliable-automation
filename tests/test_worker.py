@@ -28,16 +28,56 @@ def setup_job(db_session, event_id="evt_w1", user_id="usr_001", rule_keyword="PR
     return job
 
 
-def test_worker_process_202_accepted(db_session):
+def test_worker_process_202_accepted_and_delivered(db_session):
     job = setup_job(db_session, event_id="evt_202", user_id="u1")
     worker = DMWorker()
-    worker.client.send_dm = MagicMock(return_value=PseudoGramResponse(status_code=202))
+    worker.client.send_dm = MagicMock(return_value=PseudoGramResponse(status_code=202, dm_id="dm_123", dm_status="delivered"))
 
     worker.process_job(db_session, job)
     
     db_session.refresh(job)
     assert job.status == JobStatus.SENT.value
+    assert job.dm_id == "dm_123"
     assert job.last_error is None
+
+
+def test_worker_polls_dm_status(db_session):
+    job = setup_job(db_session, event_id="evt_poll", user_id="u_poll")
+    worker = DMWorker()
+    
+    # 1. Send DM returns 202 with status queued
+    worker.client.send_dm = MagicMock(return_value=PseudoGramResponse(status_code=202, dm_id="dm_poll_1", dm_status="queued"))
+    worker.process_job(db_session, job)
+    
+    db_session.refresh(job)
+    assert job.status == JobStatus.ACCEPTED.value
+    assert job.dm_id == "dm_poll_1"
+
+    # 2. Worker polls status via get_dm_status and finds delivered
+    worker.client.get_dm_status = MagicMock(return_value=PseudoGramResponse(status_code=200, dm_id="dm_poll_1", dm_status="delivered"))
+    worker.process_job(db_session, job)
+
+    db_session.refresh(job)
+    assert job.status == JobStatus.SENT.value
+
+
+def test_worker_polls_dm_status_failed(db_session):
+    job = setup_job(db_session, event_id="evt_fail", user_id="u_fail")
+    worker = DMWorker()
+    
+    # 1. Send DM returns 202 with status queued
+    worker.client.send_dm = MagicMock(return_value=PseudoGramResponse(status_code=202, dm_id="dm_fail_1", dm_status="queued"))
+    worker.process_job(db_session, job)
+    
+    db_session.refresh(job)
+    assert job.status == JobStatus.ACCEPTED.value
+
+    # 2. Worker polls status via get_dm_status and finds failed
+    worker.client.get_dm_status = MagicMock(return_value=PseudoGramResponse(status_code=200, dm_id="dm_fail_1", dm_status="failed"))
+    worker.process_job(db_session, job)
+
+    db_session.refresh(job)
+    assert job.status == JobStatus.FAILED.value
 
 
 def test_worker_duplicate_prevention_same_user_same_rule(db_session):
@@ -60,7 +100,7 @@ def test_worker_duplicate_prevention_same_user_same_rule(db_session):
     db_session.commit()
 
     worker = DMWorker()
-    worker.client.send_dm = MagicMock(return_value=PseudoGramResponse(status_code=202))
+    worker.client.send_dm = MagicMock(return_value=PseudoGramResponse(status_code=202, dm_id="dm_d1", dm_status="delivered"))
 
     # Process first job -> should succeed (SENT)
     worker.process_job(db_session, job1)
@@ -115,3 +155,4 @@ def test_worker_handles_400_bad_request_no_retry(db_session):
     db_session.refresh(job)
     assert job.status == JobStatus.FAILED.value
     assert "400 Bad Request" in job.last_error
+

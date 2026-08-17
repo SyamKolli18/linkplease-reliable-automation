@@ -5,17 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import api_router
-from app.database import Base, engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for creating DB tables on startup."""
-    try:
-        Base.metadata.create_all(bind=engine)
-    except Exception:
-        # Allows startup during offline testing or when database is managed externally
-        pass
+    """Lifespan context manager for application startup/shutdown."""
     yield
 
 
